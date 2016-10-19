@@ -83,7 +83,7 @@ class FlickrMiner(BaseMiner):
         results, next_page = self._search(query, limit, 1)
         while next_page and len(results) < limit:
             max = limit - len(results)
-            more_results, isMoreLeft = self._search(query, max, next_page)
+            more_results, next_page = self._search(query, max, next_page)
             results += more_results
         return results
 
