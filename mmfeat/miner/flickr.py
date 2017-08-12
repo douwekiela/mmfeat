@@ -12,6 +12,8 @@ import json
 import pickle
 from urllib import urlencode
 import re
+import time
+import datetime
 
 from .base import BaseMiner
 
@@ -52,9 +54,13 @@ class FlickrMiner(BaseMiner):
         else:
             self.oauth = self._do_oauth()
 
-    def getUrl(self, query, limit, page):
+    def getUrl(self, query, limit, page, start_date=None, end_date=None):
         params = {'text': query, 'format': 'json', 'page': page, 'per_page': min(self.MAXPERPAGE, limit),
                   'sort': 'relevance'}
+        if start_date is not None:
+            params['min_upload_date'] = start_date
+        if end_date is not None:
+            params['max_upload_date'] = end_date
         return self.format_url.format(self.host, self.api, urlencode(self._prepare_params(params)))
 
     def _prepare_params(self, params):
@@ -64,8 +70,8 @@ class FlickrMiner(BaseMiner):
                 params[key] = ','.join([item for item in value])
         return params
 
-    def _search(self, query, limit=20, page=1):
-        url = self.getUrl(query, limit, page)
+    def _search(self, query, limit=20, page=1, start_date=None, end_date=None):
+        url = self.getUrl(query, limit, page, start_date, end_date)
         r = self.oauth.get(url)
         try:
             content = re.sub('jsonFlickrApi\(', '', r.content[:-1])
@@ -75,16 +81,55 @@ class FlickrMiner(BaseMiner):
             print('ERR: Request returned with code %s (%s)' % (r.status_code, r.text))
             sys.exit()
 
+        total = int(results['total'])
         next_page = page + 1 if page < results['pages'] else False
-        return [FlickrResult(res) for res in results['photo']], next_page
+        return [FlickrResult(res) for res in results['photo']], next_page, total
 
 
     def search(self, query, limit=20):
-        results, next_page = self._search(query, limit, 1)
-        while next_page and len(results) < limit:
-            max = limit - len(results)
-            more_results, next_page = self._search(query, max, next_page)
-            results += more_results
+        FLICKR_API_LIMIT = 4000
+
+        flickr_start_date = int(datetime.date(2004,1,1).strftime("%s"))
+        current_date = int(time.time())
+        date_ranges = [(flickr_start_date, current_date)]
+        target_date_ranges = []
+
+        # build results by progressively dividing date range
+        total_results = 0
+        while not (total_results > limit or date_ranges == [] ):
+            results, next_page, total = self._search(query, limit, 1, date_ranges[-1][0], date_ranges[-1][1])
+            total_results += min(total, FLICKR_API_LIMIT)
+
+            if total > FLICKR_API_LIMIT:
+                total_results -= FLICKR_API_LIMIT
+                # pop original date range from list
+                date_range = date_ranges.pop()
+                mid_date = (date_range[0] + date_range[1] ) / 2
+                # push binary division of date range onto list
+                date_ranges.append((date_range[0], mid_date))
+                date_ranges.append((mid_date, date_range[1]))
+            else:
+                # return results if # less than api limit
+                date_range = date_ranges.pop()
+                target_date_ranges.append(date_range)
+
+        target_date_ranges += [i for i in date_ranges]
+
+        results = []
+        for date_range in target_date_ranges:
+            sub_result, next_page, total = self._search(query, limit, 1, date_range[0], date_range[1])
+            while next_page and len(sub_result) < FLICKR_API_LIMIT:
+                max = limit
+                more_results, next_page, total = self._search(query, max, next_page, date_range[0], date_range[1])
+                sub_result += more_results
+
+            sub_result = sub_result[:min(len(sub_result), FLICKR_API_LIMIT)]
+            results += sub_result
+            if len(results) > limit:
+                break
+
+        results = results[:min(len(results), limit)]
+
         return results
 
 
