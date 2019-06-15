@@ -50,7 +50,7 @@ class Space(object):
         sims = []
         for other_key in self.space:
             if other_key == key: continue
-            sims = (other_key, self.sim(key, other_key))
+            sims.append((other_key, self.sim(key, other_key)))
 
         if n is None:
             n = len(sims)
